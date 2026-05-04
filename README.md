@@ -2,9 +2,9 @@
 
 ## Ziel
 Raspberry Pi als Container-Host einrichten mit Docker und Portainer als
-webbasierte Verwaltungsoberfläche. Vaultwarden als self-hosted Passwortmanager
-mit echtem HTTPS über Traefik, Cloudflare DNS-Challenge und Cloudflare Tunnel
-(aufgrund von CG-NAT durch Vodafone).
+webbasierte Verwaltungsoberfläche. Vaultwarden als self-hosted Passwortmanager 
+und Nextcloud als Cloud-Speicher, mit echtem HTTPS über Traefik, Cloudflare 
+DNS-Challenge und Cloudflare Tunnel (aufgrund von CG-NAT durch Vodafone).
 
 ## Setup
 - **Hardware:** Raspberry Pi 5 (8 GB RAM)
@@ -24,7 +24,7 @@ Pi-hole Local DNS → 192.168.0.175 direkt
 
 Handy/Laptop (Unterwegs)
         ↓
-Cloudflare Tunnel → cloudflared → Vaultwarden
+Cloudflare Tunnel → cloudflared → Vaultwarden / Nextcloud
 ```
 
 ---
@@ -38,7 +38,8 @@ Cloudflare Tunnel → cloudflared → Vaultwarden
 curl -fsSL https://get.docker.com | sudo sh
 ```
 
-**Benutzer zur Docker-Gruppe hinzufügen**
+**Benutzer zur Docker-Gruppe hinzufügen** 
+
 Erst nach erneutem Einloggen aktiv.
 ```bash
 sudo usermod -aG docker admin
@@ -51,6 +52,7 @@ docker --version
 ```
 
 **Portainer installieren**
+
 Webbasierte Oberfläche zur Verwaltung von Docker-Containern.
 ```bash
 docker volume create portainer_data
@@ -73,8 +75,8 @@ http://192.168.0.175:9000
 - Docker-Gruppe erst nach erneutem SSH-Login aktiv
 
 ### Lessons Learned
-- `--restart always` sorgt dafür dass Container nach Pi-Neustart automatisch starten
-- `-v /var/run/docker.sock` gibt Portainer Zugriff auf Docker selbst
+- `--restart always` sorgt dafür, dass Container nach Pi-Neustart automatisch starten
+- `-v /var/run/docker.sock` gibt Portainer-Zugriff auf Docker selbst
 
 ---
 
@@ -82,7 +84,7 @@ http://192.168.0.175:9000
 
 ### Problem
 Vaultwarden benötigt zwingend HTTPS, auch lokal im Heimnetz. HTTP-Workaround
-über `DOMAIN`-Umgebungsvariable funktioniert nicht (Subtle Crypto API).
+über `DOMAIN`-Umgebungsvariable funktioniert nicht.
 
 ### Entscheidung
 Vaultwarden erst nach Traefik einrichten. Traefik stellt HTTPS für alle
@@ -184,7 +186,7 @@ Dashboard: `http://192.168.0.175:8090/dashboard/`
 ### Lessons Learned
 - Pi-hole und Traefik können nicht gleichzeitig Port 80/443 nutzen
 - Pi-hole muss auf alternative Ports verschoben werden
-- Cloudflare DNS-Challenge funktioniert ohne offenen Port – ideal für CG-NAT
+- Cloudflare DNS-Challenge funktioniert ohne offenen Port (ideal für CG-NAT)
 
 ---
 
@@ -209,7 +211,7 @@ docker run -d \
 ```
 
 ### Stolperstein: CG-NAT blockiert eingehenden Traffic
-`vaultwarden.4mailz.de` war von außen nicht erreichbar – Vodafone Station
+`vaultwarden.4mailz.de` war von außen nicht erreichbar - Vodafone Station
 blockiert eingehenden Traffic (CG-NAT).
 
 **Lösung: Cloudflare Tunnel**
@@ -373,12 +375,11 @@ sudo pihole restartdns flush
 ```
 
 ### Stolpersteine
-- USB-Stick muss ext4 sein — FAT32 unterstützt keine Linux-Berechtigungen
-- Netzwerk-Alias nötig da docker-compose den Container `nextcloud-nextcloud-1` nennt, Traefik aber `nextcloud` erwartet
-- Zwei Cloudflare Tunnel angelegt — nur einer kann aktiv sein, beide Hostnames in einen Tunnel
+- USB-Stick muss ext4 sein, FAT32 unterstützt keine Linux-Berechtigungen
+- Netzwerk-Alias nötig, da docker-compose den Container `nextcloud-nextcloud-1` nennt, Traefik aber `nextcloud` erwartet
+- Zwei Cloudflare Tunnel angelegt: nur einer kann aktiv sein, beide Hostnames in einen Tunnel
 
 ### Lessons Learned
 - docker-compose für Multi-Container-Apps (DB + Cache + App + Cron)
 - `TRUSTED_PROXIES` und `OVERWRITEPROTOCOL` für korrekte HTTPS-Erkennung hinter Traefik
 - Ein Cloudflare Tunnel reicht für beliebig viele Services
-
