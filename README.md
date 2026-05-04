@@ -1,4 +1,4 @@
-# Homelab: Docker + Portainer + Traefik + Vaultwarden auf Raspberry Pi 5
+# Homelab: Docker + Traefik + Vaultwarden + Nextcloud auf Raspberry Pi 5
 
 ## Ziel
 Raspberry Pi als Container-Host einrichten mit Docker und Portainer als
@@ -247,3 +247,138 @@ Danach:
 - cloudflared muss im selben Docker-Netzwerk wie Vaultwarden laufen
 - `SIGNUPS_ALLOWED=false` verhindert unbefugte Registrierungen
 - Pi-hole Local DNS verhindert Split-DNS-Probleme im Heimnetz
+
+## Sitzung 5: Nextcloud
+
+### USB-Stick vorbereiten
+```bash
+# Auf ext4 formatieren (FAT32 unterstützt keine Linux-Berechtigungen)
+sudo umount /dev/sda1
+sudo mkfs.ext4 /dev/sda1
+
+# Mounten
+sudo mkdir -p /mnt/nextcloud-data
+sudo mount /dev/sda1 /mnt/nextcloud-data
+
+# Permanent via fstab (nofail = Pi startet auch ohne Stick)
+echo "UUID=6fcc5662-fcab-469a-a5c6-26422857c9e5 /mnt/nextcloud-data ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab
+```
+
+### /opt/nextcloud/docker-compose.yml
+```yaml
+services:
+  nextcloud-db:
+    image: mariadb:11
+    restart: always
+    networks:
+      - traefik_network
+    volumes:
+      - nextcloud_db:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: PASSWORT
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: PASSWORT
+
+  nextcloud-redis:
+    image: redis:alpine
+    restart: always
+    networks:
+      - traefik_network
+
+  nextcloud:
+    image: nextcloud:latest
+    restart: always
+    networks:
+      traefik_network:
+        aliases:
+          - nextcloud
+    volumes:
+      - nextcloud_html:/var/www/html
+      - /mnt/nextcloud-data/data:/var/www/html/data
+    environment:
+      MYSQL_HOST: nextcloud-db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: PASSWORT
+      REDIS_HOST: nextcloud-redis
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: PASSWORT
+      NEXTCLOUD_TRUSTED_DOMAINS: nextcloud.4mailz.de
+      PHP_MEMORY_LIMIT: 512M
+      PHP_UPLOAD_LIMIT: 512M
+      PHP_OPCACHE_ENABLE: "1"
+      PHP_OPCACHE_MEMORY_CONSUMPTION: "128"
+      TRUSTED_PROXIES: 172.18.0.0/16
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: https://nextcloud.4mailz.de
+      NC_maintenance_window_start: "1"
+    depends_on:
+      - nextcloud-db
+      - nextcloud-redis
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nextcloud.rule=Host(`nextcloud.4mailz.de`)"
+      - "traefik.http.routers.nextcloud.entrypoints=websecure"
+      - "traefik.http.routers.nextcloud.tls=true"
+      - "traefik.http.routers.nextcloud.tls.certresolver=cloudflare"
+      - "traefik.http.services.nextcloud.loadbalancer.server.port=80"
+
+  nextcloud-cron:
+    image: nextcloud:latest
+    restart: always
+    networks:
+      - traefik_network
+    volumes:
+      - nextcloud_html:/var/www/html
+      - /mnt/nextcloud-data/data:/var/www/html/data
+    entrypoint: /cron.sh
+    depends_on:
+      - nextcloud-db
+      - nextcloud-redis
+
+volumes:
+  nextcloud_db:
+  nextcloud_html:
+
+networks:
+  traefik_network:
+    external: true
+```
+
+```bash
+cd /opt/nextcloud
+docker compose up -d
+```
+
+### Cloudflare Tunnel erweitern
+Cloudflare → Zero Trust → Tunnels → bestehender Tunnel → Public Hostnames → Add:
+- Subdomain: `nextcloud`
+- Domain: `4mailz.de`
+- Service: `http://nextcloud:80`
+
+### Pi-hole + Unbound für nextcloud.4mailz.de
+```bash
+sudo nano /etc/unbound/unbound.conf.d/vaultwarden.conf
+```
+Hinzufügen:
+```
+    local-data: "nextcloud.4mailz.de. 3600 IN A 192.168.0.175"
+    local-data-ptr: "192.168.0.175 nextcloud.4mailz.de"
+    local-zone: "nextcloud.4mailz.de." static
+```
+```bash
+sudo systemctl restart unbound
+sudo pihole restartdns flush
+```
+
+### Stolpersteine
+- USB-Stick muss ext4 sein — FAT32 unterstützt keine Linux-Berechtigungen
+- Netzwerk-Alias nötig da docker-compose den Container `nextcloud-nextcloud-1` nennt, Traefik aber `nextcloud` erwartet
+- Zwei Cloudflare Tunnel angelegt — nur einer kann aktiv sein, beide Hostnames in einen Tunnel
+
+### Lessons Learned
+- docker-compose für Multi-Container-Apps (DB + Cache + App + Cron)
+- `TRUSTED_PROXIES` und `OVERWRITEPROTOCOL` für korrekte HTTPS-Erkennung hinter Traefik
+- Ein Cloudflare Tunnel reicht für beliebig viele Services
+
